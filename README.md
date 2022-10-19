@@ -11,3 +11,4 @@ Video: https://youtu.be/1UP3MJ2PQ9I
 
 ## Episode 3
 
+Video: https://youtu.be/1IO1ntgcUc8
