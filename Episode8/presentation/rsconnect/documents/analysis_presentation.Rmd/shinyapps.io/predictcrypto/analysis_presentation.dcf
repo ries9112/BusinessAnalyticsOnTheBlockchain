@@ -1,0 +1,14 @@
+name: analysis_presentation
+title: analysis_presentation
+username:
+account: predictcrypto
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 9365814
+bundleId: 7457279
+url: https://predictcrypto.shinyapps.io/analysis_presentation/
+when: 1689348702.37701
+lastSyncTime: 1689348702.37703
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: subgraph_data_delegates_20230605.csv|subgraph_data_votes_20230609.csv|proposals_20230623.csv|snapshot_votes_20230626.csv|subgraph_data_token_holders_20230604.csv|token_prices_20230626.csv
