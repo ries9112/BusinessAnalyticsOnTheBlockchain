@@ -1,0 +1,711 @@
+---
+title: "DAOs Analysis"
+output: html_document
+runtime: shiny
+date: "2023-05-31"
+---
+
+```{r setup, include=FALSE, cache=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+options(scipen=999)
+
+library(reticulate)
+library(tidyverse)
+library(ineq)
+
+# Import data - TODO: CHANGE TO USE PINS DATASETS (maybe summarized versions as well, but evaluate how big the data is and how often this needs to run).
+# ALSO: should move to use the decentralized network for these once the hosted service is sunset
+token_holders = read_csv('subgraph_data_token_holders_20230604.csv')
+delegates = read_csv("subgraph_data_delegates_20230605.csv")
+votes = read_csv("subgraph_data_votes_2023-05-31_backup2.csv")
+# contracts = read_csv("contracts_2023-05-14.csv")
+proposals = read_csv("proposals_20230623.csv")
+snapshot_votes = read_csv("snapshot_votes_20230625.csv")
+token_prices = read_csv('token_prices_20230626.csv')
+
+# for delegates remove those that have either 0 delegatedVotes or delegatedStakedTokenVotes
+delegates = delegates %>% filter(delegatedVotes != 0 | delegatedStakedTokenVotes != 0)
+
+# check that counts are correct after distinct
+token_holders %>% distinct() %>% group_by(Protocol) %>% count() %>% arrange(desc(n))
+
+# THING TO CHECK: how do counts for a protocol like AAVE compare between delegates and token holders? Does everyone show up in delegates data? Has an impact on the difficulty of later step for protocols with staking
+delegates %>% distinct() %>% group_by(Protocol) %>% count() %>% arrange(desc(n))
+votes %>% distinct() %>% group_by(Protocol) %>% count() %>% arrange(desc(n))
+
+# Remove duplicate protocols
+token_holders = token_holders %>% filter(!str_detect(Protocol, '-v1'))
+# also make labels smaller by getting rid of -governance string
+token_holders = token_holders %>% mutate(Protocol = str_replace(Protocol, "-governance", ""))
+
+# for votes get to the address of the voter by keeping part of id before the dash
+votes = votes %>% mutate(voter_id = stringr::str_split(id, "-", simplify = TRUE)[, 1])
+votes = votes %>% mutate(proposal_id = stringr::str_split(id, "-", simplify = TRUE)[, 2])
+# exclude edge cases with bad data (only two rows as of June 5th, 2023)
+votes = votes %>% filter(!str_detect(Protocol, 'FOR'))
+# also make labels smaller by getting rid of -governance string
+votes = votes %>% mutate(Protocol = str_replace(Protocol, "-governance", ""))
+
+# adjust labels for -governance string
+proposals = proposals %>% mutate(Protocol = str_replace(Protocol, "-governance", ""))
+
+```
+
+
+NOTES:
+
+- IMPORTANT: RUNNING SCRIPT AGAIN TO GET THE FULL DATA WITHOUT EXCLUDING CONTRACT ADDRESSES. SHOULD REMOVE THEM AFTERWARDS IN HERE! (instead of in subgraph_data csv file - remove them after) ✅ (confirm  that  analysis is excluding contract addresses when the time comes)
+
+- MAKE SURE that I'm collecting the full votes data when doing the analysis on the individual votes. Compare totals to the aggregated counts after pulling data. If mismatch, try pulling for one vote in particular (maybe find one with less than 1k votes) and see what it looks like
+
+- Make the whole document reproducible. Once hosted service goes away users will need to modify this to leverage the decentralized network and use their own api key. (but I should consider creating automated refreshes of the analysis - could make self-contained shinyapps and embed them inside the article and have the underlying datasets update weekly. Maybe write something super light ready to be visualized in pins and do the data processing in the RStudio Server)
+
+- Leverage GPT to help make the writing a bit more cohesive and give me a better starting point to edit and think through (GPT might add some good points hopefully). Also use it to confirm some of the things I'm saying about DAOs.
+
+
+
+## Intro
+
+Should mention from the start that these are tools that have a ton of potential and none of this is meant to criticize these systems. Just meant to create more transparency and start interesting discussions with open source code which is reproducible and forkable
+
+(I should also deepen my understanding of governance subgraphs - does their site include more DAOs activity? Am I able to track those as well?)
+
+- here should also give a quick intro to Messari standardized schemas
+
+- should also outline the typical governance process (use AAVE as an example to guide this). Usually there are informal proposals, which are formalized, then go to a snapshot vote, and then are voted on-chain (confirm in AAVE docs, probably missed something)
+
+### Methodology
+
+... explain here
+
+
+Pulled `r nrow(token_holders)` rows of token holders info
+
+
+## Token Holders by Protocol
+
+```{r}
+token_holders_summary = token_holders %>% group_by(Protocol) %>% count() 
+
+ggplot(token_holders_summary, aes(x = reorder(Protocol, n), y = n)) +
+    geom_bar(stat = "identity", fill = "steelblue") +
+    geom_text(aes(label = scales::comma(n)), hjust = -0.1, color = "white") +
+    coord_flip() +
+    scale_y_continuous(labels = scales::comma, expand = expansion(mult = c(0, .1))) +
+    scale_x_discrete(expand = expansion(add = c(0, 0))) +  # slight offset added here
+    xlab("Protocol") +
+    ylab("Token Holders") +
+    theme_minimal() +
+    theme(plot.background = element_rect(fill = "black", colour = "black"),
+          panel.background = element_rect(fill = "black"),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          axis.text = element_text(color = "white", size = 12, vjust = 0.5),
+          axis.title = element_text(color = "white"),
+          axis.ticks = element_line(color = "white"),
+          axis.line = element_line(colour = "white"),
+          plot.title = element_text(color = "white", hjust = 0.5)) +
+    ggtitle("Token holders by protocol") #+ 
+  # to prevent top value from being cutoff
+  # expand_limits(y = max(plot$n) * 1.1)
+```
+
+## Votes by Protocol
+
+```{r}
+votes_summary = votes %>% group_by(Protocol) %>% count() 
+
+ggplot(votes_summary, aes(x = reorder(Protocol, n), y = n)) +
+    geom_bar(stat = "identity", fill = "steelblue") +
+    geom_text(aes(label = scales::comma(n)), hjust = -0.1, color = "white") +
+    coord_flip() +
+    scale_y_continuous(labels = scales::comma, expand = expansion(mult = c(0, .1))) +
+    scale_x_discrete(expand = expansion(add = c(0, 0))) +  # slight offset added here
+    xlab("Protocol") +
+    ylab("Votes") +
+    theme_minimal() +
+    theme(plot.background = element_rect(fill = "black", colour = "black"),
+          panel.background = element_rect(fill = "black"),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          axis.text = element_text(color = "white", size = 12, vjust = 0.5),
+          axis.title = element_text(color = "white"),
+          axis.ticks = element_line(color = "white"),
+          axis.line = element_line(colour = "white"),
+          plot.title = element_text(color = "white", hjust = 0.5)) +
+    ggtitle("Votes by protocol") #+ 
+  # to prevent top value from being cutoff
+  # expand_limits(y = max(plot$n) * 1.1)
+```
+
+
+## Proposals by Protocol
+
+```{r}
+proposals_summary = proposals %>% group_by(Protocol) %>% count() 
+
+ggplot(proposals_summary, aes(x = reorder(Protocol, n), y = n)) +
+    geom_bar(stat = "identity", fill = "steelblue") +
+    geom_text(aes(label = scales::comma(n)), hjust = -0.1, color = "white") +
+    coord_flip() +
+    scale_y_continuous(labels = scales::comma, expand = expansion(mult = c(0, .1))) +
+    scale_x_discrete(expand = expansion(add = c(0, 0))) +  # slight offset added here
+    xlab("Protocol") +
+    ylab("Proposals") +
+    theme_minimal() +
+    theme(plot.background = element_rect(fill = "black", colour = "black"),
+          panel.background = element_rect(fill = "black"),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          axis.text = element_text(color = "white", size = 12, vjust = 0.5),
+          axis.title = element_text(color = "white"),
+          axis.ticks = element_line(color = "white"),
+          axis.line = element_line(colour = "white"),
+          plot.title = element_text(color = "white", hjust = 0.5)) +
+    ggtitle("Proposals by protocol") #+ 
+  # to prevent top value from being cutoff
+  # expand_limits(y = max(plot$n) * 1.1)
+```
+
+With breakdown by status
+
+```{r}
+# First, aggregate data by Protocol and state
+proposals_summary = proposals %>%
+  group_by(Protocol, state) %>%
+  count()
+
+# Create the bar chart
+ggplot(proposals_summary, aes(x = reorder(Protocol, n), y = n, fill = state)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_y_continuous(labels = scales::comma, expand = expansion(mult = c(0, .1))) +
+  scale_x_discrete(expand = expansion(add = c(0, 0))) +
+  xlab("Protocol") +
+  ylab("Proposals") +
+  theme_minimal() +
+  theme(plot.background = element_rect(fill = "black", colour = "black"),
+        panel.background = element_rect(fill = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text = element_text(color = "white", size = 12, vjust = 0.5),
+        axis.title = element_text(color = "white"),
+        axis.ticks = element_line(color = "white"),
+        axis.line = element_line(colour = "white"),
+        plot.title = element_text(color = "white", hjust = 0.5),
+        legend.text = element_text(color = "white")) +
+  ggtitle("Proposals by protocol")
+```
+
+
+## Measuring Inequality
+
+- let's also frame the problem they are trying to solve. (ASK FOR GPT INPUT HERE). What are the specific problems we are aiming to solve? Once we identify those we can assess 
+
+Two main comparisons I want to make here:
+
+  - how the distribution of wealth in these tokens compares to wealth in the united states, which is typically seen as a country with a large discrepancy between the top 1% and 
+
+  - any examples of publicly traded traditional orgs we can compare here in terms of how the decision making power is distributed? Typically boards get to make the most meaningful decisions, correct? How does this compare in terms of distribution of decision making power? What's the best way of drawing the comparison?
+
+- IMPORTANT: some protocols have staking mechanisms that we need to account for (like AAVE). So for those after smart contracts exclusions we want to keep the results using the `delegators` entity for the users that appear in there over the main data. So users in delegators entity should overwrite the balances data (don't keep both, be careful about the join)
+
+
+We can start by measuring the distribution of the wealth of the tokens, and therefore the voting power users get 
+
+
+
+
+
+... ADD here about inequality and gini coefficients and lorenz charts
+
+here have discussions and explain gini coefficient and everything around centralized exchanges etc... first showing with them included, and then with the exclusion
+
+
+These charts just meant to illustrate that we need to make changes. Should probably just get rid of these:
+
+```{r}
+# Dropdown menu
+selectInput("protocol", "Select a protocol:", choices = unique(token_holders_summary$Protocol))
+
+# Reactive Lorenz curve and Gini coefficient calculation and plot
+renderPlot({
+  # Filter data based on selected protocol
+  filtered_plot = filter(token_holders, Protocol == input$protocol)
+
+  # Compute the Lorenz curve
+  lorenz_curve = ineq::Lc(filtered_plot$tokenBalance)
+  
+  # Compute the Gini coefficient
+  gini_coefficient = ineq::Gini(filtered_plot$tokenBalance)
+  
+  # Create data for Lorenz curve plot
+  lorenz_df = data.frame(Percent = c(0, lorenz_curve$p, 1),
+                          LorenzCurve = c(0, lorenz_curve$L, 1))
+
+  # Plot the Lorenz curve
+  ggplot(lorenz_df, aes(x = Percent)) +
+    geom_ribbon(aes(ymin = Percent, ymax = LorenzCurve), fill = "lightblue", alpha = 0.5) +
+    geom_line(aes(y = LorenzCurve), color = "steelblue", size = 1.2) +
+    geom_line(aes(y = Percent), linetype = "dashed", color = "white", size = 1.2) +
+    labs(x = "Cumulative Share of Addresses", 
+         y = "Cumulative Share of Token Holders",
+         title = paste("Lorenz Curve for ", input$protocol, 
+                       "\n(Gini Coefficient = ", round(gini_coefficient, 2), ")")) +
+    theme_minimal(base_size = 16, base_family = "") +
+    theme(plot.title = element_text(hjust = 0.5, color = "white", size = 18, face = "bold"),
+          plot.background = element_rect(fill = "black"),
+          panel.background = element_rect(fill = "black"),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          axis.text = element_text(color = "white"),
+          axis.title = element_text(color = "white"),
+          axis.ticks = element_line(color = "white"),
+          axis.line = element_line(color = "white"))
+})
+```
+
+### Removing Smart Contracts
+
+- shouldn't be excluding gnosis multi sigs. Saw this subgraph but has indexing error: https://thegraph.com/hosted-service/subgraph/gjeanmart/gnosis-safe-mainnet
+
+^might want to consider just explaining the challenges here and explaining that looking at the votes themselves is the better approach here
+
+
+
+- also worth mentioning how we are unable to categorize individuals splitting things up across several wallets, which means the reality of the situation here is likely worse than this as well.
+
+
+## Votes Analysis
+
+Number of proposals by protocol:
+
+```{r}
+num_proposals_protocol = votes %>% group_by(Protocol) %>% summarize(number_of_proposals = n_distinct(proposal_id))
+```
+
+
+IMPORTANT: create a nice narrative here around the fact that yes we could look at token holders, and yes we could remove contracts while keeping multi-sigs, but it's not a good approach because we can't account for example for every case when tokens get locked in a contract but can still be used in governance and all the nuances different protocols may have. SO, it makes sense to just observe the data around real votes that took place in the past.
+
+
+so if we take away all the noise in terms of token holders and just look at voter participation and how distributed the decision making power actually gets spread when making decisions, what does that look like across different protocols?
+
+
+first let's get the median vote power by user:
+```{r}
+votes %>% 
+  group_by(Protocol, voter_id) %>% 
+  summarize(avg_vote_power = mean(weight/10^18),
+            proposals_voted_on = n()) %>% 
+  arrange(desc(avg_vote_power)) %>% filter(Protocol == 'aave')
+
+
+# or maybe a different approach could be to look at the vote which had the most participation in terms of users and analyze the gini coefficient there. Or just do both.
+votes %>% group_by(Protocol) %>% count() %>% arrange(desc(n))
+```
+
+now let's look at things by proposal
+```{r}
+# calculate gini coefficient directly
+proposals_summary = votes %>% 
+  group_by(Protocol, proposal_id) %>% 
+  summarize(avg_vote_power = mean(weight/10^18),
+            proposals_voted_on = n(),
+            gini_coefficient = ineq::Gini(weight)) %>% 
+  arrange(desc(proposals_voted_on))
+# show
+proposals_summary %>% filter(Protocol == 'uniswap')
+
+# calculate the median gini coefficient by protocol
+proposals_summary_protocol = proposals_summary %>% 
+  ungroup() %>% group_by(Protocol) %>% 
+  summarize(avg_gini_coefficient = mean(gini_coefficient, na.rm=T),
+            median_gini_coefficient =  median(gini_coefficient, na.rm=T),
+            count_proposals = n())
+
+```
+
+compare results by protocol before visualizing
+```{r}
+proposals_summary_protocol %>% arrange(desc(count_proposals))
+```
+
+Instead of just Lorenz curve, also show the bar chart of gini coefficients by protocol
+
+```{r}
+ggplot(proposals_summary_protocol, aes(x = reorder(Protocol, median_gini_coefficient), y = median_gini_coefficient)) +
+    geom_bar(stat = "identity", fill = "steelblue") +
+    geom_text(aes(label = scales::comma(median_gini_coefficient)), hjust = -0.1, color = "white") +
+    coord_flip() +
+    scale_y_continuous(labels = scales::comma, expand = expansion(mult = c(0, .1))) +
+    scale_x_discrete(expand = expansion(add = c(0, 0))) +  # slight offset added here
+    xlab("Protocol") +
+    ylab("Token Holders") +
+    theme_minimal() +
+    theme(plot.background = element_rect(fill = "black", colour = "black"),
+          panel.background = element_rect(fill = "black"),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          axis.text = element_text(color = "white", size = 12, vjust = 0.5),
+          axis.title = element_text(color = "white"),
+          axis.ticks = element_line(color = "white"),
+          axis.line = element_line(colour = "white"),
+          plot.title = element_text(color = "white", hjust = 0.5)) +
+    ggtitle("Median Gini Coefficient on Voted Proposals by Protocol") #+ 
+  # to prevent top value from being cutoff
+  # expand_limits(y = max(plot$n) * 1.1)
+```
+
+
+Add another metric to measure how many users controlled more than 50% of a given vote
+```{r}
+df = votes %>%
+  group_by(Protocol, proposal_id) %>%
+  arrange(desc(weight)) %>%
+  mutate(cum_weight = cumsum(weight),
+         total_weight = sum(weight)) %>%
+  ungroup() %>%
+  mutate(users_with_50perc_vote = cum_weight >= (total_weight / 2))
+
+# counting number of users for each group who had 50% of votes
+result = df %>%
+  # filter(users_with_50perc_vote == TRUE) %>% 
+  group_by(Protocol, proposal_id) %>%
+  summarise(num_users_with_50perc_vote = sum(users_with_50perc_vote),
+            cum_weight = max(cum_weight),
+            total_weight = max(total_weight))
+```
+
+Number of minimum users controlling 50% or more of the vote over time - example by protocol
+```{r}
+ggplot(filter(result, Protocol == 'aave'), aes(as.numeric(proposal_id), num_users_with_50perc_vote)) + geom_line()
+```
+
+- ^ compare this one to token prices? (maybe too difficult, keep as stretch goal)
+
+- could calculate the expressed vote power (as in vote power times number of proposals) - not that important
+
+
+
+
+### Cost of Decision Making Power
+
+- How much $ to control decisions (50%+ of active votes) as it stands in the different protocols?
+
+    - How does it relate to the TLV controlled by the platforms?
+    
+    - Here basically need daily prices for the different tokens
+
+
+- Does this fluctuate a lot based on what the markets are doing? (can make it easier to attack these systems at the right times)
+
+
+
+### Voter Participation
+
+- show distribution of number of votes by users for different protocols
+
+```{r}
+votes_by_user = votes %>% group_by(Protocol, voter_id) %>% count() %>% arrange(desc(n))
+# show 
+votes_by_user
+```
+
+- % participation by users who voted at least once
+
+```{r}
+votes_by_user %>% 
+  left_join(num_proposals_protocol) %>% 
+  summarize(percent_voted_on = n/number_of_proposals,
+            n = max(n),
+            number_of_proposals = max(number_of_proposals))
+```
+
+- ^ create box plot with error bars or violin chart
+
+- do something around showing % FOR vs % AGAINST, compare by protocol
+
+    - within each protocol could look at 10 most recent votes and see % FOR vs. % AGAINST
+
+
+- here analyze what percentage of token holders participate in governance (probably not worth looking at this one actually, too nuanced)
+
+    - and percentage of tokens held too (with or without centralized exchanges?)
+    
+
+### Off Chain Voting Comparisons
+
+
+```{r}
+# summarize data in the way I want to visualize it
+#-number of proposals - bar chart comparisons by protocol
+#-number of voters by proposal (median, etc...) - bar chart comparisons by protocol
+#-line chart comparing onchain votes and offchain votes over time by day or week
+
+# First adjust protocol names as needed
+# remove .eth from protocol names - TODO
+snapshot_votes = snapshot_votes %>%
+  mutate(Protocol = sub("\\.eth$", "", Protocol))
+
+snapshot_votes = snapshot_votes %>%
+  mutate(Protocol = case_when(
+    Protocol == "comp-vote" ~ "compound-v1",
+    Protocol == "opcollective" ~ "optimism",
+    Protocol == "gitcoindao" ~ "gitcoin",
+    Protocol == "dydxgov" ~ "dydx",
+    Protocol == "silofinance" ~ "silo",
+    Protocol == "pooltogether" ~ "pooltogether",
+    Protocol == "ampleforthorg" ~ "ampleforth",
+    Protocol == "idlefinance" ~ "idle",
+    Protocol == "gov.radicle" ~ "radicle",
+    Protocol == "unlock-protocol" ~ "unlock",
+    TRUE ~ Protocol  # this line ensures that if none of the conditions above are met, the original value is kept
+  ))
+
+# data for number of proposals - bar chart comparisons by protocol
+snapshot_proposal_num = snapshot_votes %>% 
+  group_by(Protocol) %>% 
+  summarize(num_proposals = n_distinct(proposal_id))
+# summarize onchain votes
+onchain_proposals = proposals %>% group_by(Protocol) %>% count() 
+# join snapshot votes to onchain votes data for visualization
+snapshot_proposal_num = snapshot_proposal_num %>% 
+  left_join(onchain_proposals) %>% 
+  rename(offchain_num_proposals = num_proposals,
+         onchain_num_proposals = n)
+
+
+# data for number of voters by proposal (median, etc...) - bar chart comparisons by protocol
+snapshot_proposal_voters = snapshot_votes %>% 
+  # summarize number of voters by proposal first before going back to Protocol level
+  group_by(Protocol, proposal_id) %>% 
+  summarize(offchain_num_proposal_voters = n_distinct(voter)) %>% 
+  # change grouping to Protocol
+  ungroup() %>% group_by(Protocol) %>% 
+  # get median number of voters on proposals by protocol
+  summarize(offchain_median_proposal_voters = median(offchain_num_proposal_voters, na.rm=T))
+# summarize onchain voters by proposal
+onchain_voters = votes %>% 
+  group_by(Protocol, proposal_id) %>% 
+  summarize(onchain_num_proposal_voters = n_distinct(voter_id)) %>% 
+  # change grouping to Protocol
+  ungroup() %>% group_by(Protocol) %>% 
+  # get median number of voters on proposals by protocol
+  summarize(onchain_median_proposal_voters = median(onchain_num_proposal_voters, na.rm=T))
+# join snapshot votes to onchain votes data for visualization
+snapshot_proposal_voters = snapshot_proposal_voters %>% 
+  left_join(onchain_voters)
+
+# data for line chart comparing onchain votes and offchain votes over time by day or week
+snapshot_votes_daily = snapshot_votes %>% 
+  mutate(timestamp = as.POSIXct(created, origin="1970-01-01", tz = "UTC"),
+         day = format(timestamp, "%Y-%m-%d")) %>% 
+  group_by(Protocol, day) %>% 
+  summarize(offchain_daily_votes = n())
+# summarize onchain votes
+onchain_votes_daily = votes %>%
+  mutate(timestamp = as.POSIXct(blockTime, origin="1970-01-01", tz = "UTC"),
+         day = format(timestamp, "%Y-%m-%d")) %>% 
+  group_by(Protocol, day) %>% 
+  summarize(onchain_daily_votes = n())
+
+
+# join snapshot votes to onchain votes data for visualization
+votes_daily = snapshot_votes_daily %>% 
+  full_join(onchain_votes_daily)
+
+```
+
+
+number of proposals - bar chart comparisons by protocol
+
+note: anything I can do to represent % jump between two bar charts?
+```{r}
+# make a % onchain vs offchain one
+# calculate the percentages
+snapshot_proposal_num = snapshot_proposal_num %>%
+  mutate(total = offchain_num_proposals + onchain_num_proposals,
+         offchain_percent = offchain_num_proposals / total,
+         onchain_percent = onchain_num_proposals / total)
+
+# reshape the data
+df_long = snapshot_proposal_num %>%
+  select(Protocol, offchain_percent, onchain_percent) %>%
+  pivot_longer(cols = c(offchain_percent, onchain_percent), 
+               names_to = "Type", 
+               values_to = "Percent")
+
+# create the plot
+ggplot(df_long, aes(x = reorder(Protocol, Percent), y = Percent, fill = Type)) + 
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_y_continuous(labels = scales::percent_format(), expand = expansion(mult = c(0, .1))) +
+  scale_x_discrete(expand = expansion(add = c(0, 0))) +
+  xlab("Protocol") +
+  ylab("Percentage") +
+  theme_minimal() +
+  theme(plot.background = element_rect(fill = "black", colour = "black"),
+        panel.background = element_rect(fill = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text = element_text(color = "white", size = 12, vjust = 0.5),
+        axis.title = element_text(color = "white"),
+        axis.ticks = element_line(color = "white"),
+        axis.line = element_line(colour = "white"),
+        plot.title = element_text(color = "white", hjust = 0.5),
+        legend.text = element_text(color = "white")) +
+  ggtitle("Percentage of Proposals Off-chain vs. On-chain")
+```
+
+
+number of voters by proposal (median, etc...) - bar chart comparisons by protocol
+
+note: anything I can do to represent % jump between two bar charts?
+```{r}
+# make a % onchain vs offchain one
+# calculate the percentages
+snapshot_proposal_voters_num = snapshot_proposal_voters %>%
+  mutate(total = offchain_median_proposal_voters + onchain_median_proposal_voters,
+         offchain_percent = offchain_median_proposal_voters / total,
+         onchain_percent = onchain_median_proposal_voters / total)
+
+# reshape the data
+df_long = snapshot_proposal_voters_num %>%
+  select(Protocol, offchain_percent, onchain_percent) %>%
+  pivot_longer(cols = c(offchain_percent, onchain_percent), 
+               names_to = "Type", 
+               values_to = "Percent")
+
+# create the plot
+ggplot(df_long, aes(x = reorder(Protocol, Percent), y = Percent, fill = Type)) + 
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_y_continuous(labels = scales::percent_format(), expand = expansion(mult = c(0, .1))) +
+  scale_x_discrete(expand = expansion(add = c(0, 0))) +
+  xlab("Protocol") +
+  ylab("Percentage") +
+  theme_minimal() +
+  theme(plot.background = element_rect(fill = "black", colour = "black"),
+        panel.background = element_rect(fill = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text = element_text(color = "white", size = 12, vjust = 0.5),
+        axis.title = element_text(color = "white"),
+        axis.ticks = element_line(color = "white"),
+        axis.line = element_line(colour = "white"),
+        plot.title = element_text(color = "white", hjust = 0.5),
+        legend.text = element_text(color = "white")) +
+  ggtitle("Percentage of Median Voters Off-chain vs. On-chain")
+```
+
+
+line chart comparing onchain votes and offchain votes over time by day or week
+```{r}
+# reshape the data
+df_long = votes_daily %>%
+  select(Protocol, day, offchain_daily_votes, onchain_daily_votes) %>%
+  pivot_longer(cols = c(offchain_daily_votes, onchain_daily_votes), 
+               names_to = "type", 
+               values_to = "votes")
+# set protocol for chart
+protocol = 'optimism'
+# make chart
+plotly::ggplotly(df_long %>% 
+  filter(Protocol == protocol) %>% 
+  ggplot(aes(x = as.Date(day), y = votes, color = type)) +
+  geom_line() +
+  scale_y_continuous(labels = scales::comma) +
+  xlab("Day") +
+  ylab("Votes") +
+  theme_minimal() +
+  theme(plot.background = element_rect(fill = "black", colour = "black"),
+        panel.background = element_rect(fill = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text = element_text(color = "white", size = 12, vjust = 0.5),
+        axis.title = element_text(color = "white"),
+        axis.ticks = element_line(color = "white"),
+        axis.line = element_line(colour = "white"),
+        plot.title = element_text(color = "white", hjust = 0.5),
+        legend.text = element_text(color = "white")) +
+  ggtitle(paste0("Off-chain vs. On-chain Votes by Day - ", protocol)))
+```
+
+
+ALSO: compare gini coefficients of voting power between offchain and onchain 
+```{r}
+
+```
+
+
+### Voting Reasons Word Cloud
+
+- here add word cloud shiny app, first filtered by protocol, and then have another for individual proposals
+
+
+
+
+## Token Prices
+
+Any interesting relationships to token prices?
+
+```{r}
+token_prices
+
+votes_daily
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+## Closing Thoughts
+
+here talk about how the principles blockchain strives to achieve are generally failing in the context of most DAOs, at least in terms of there being a difference between how we market and view these things compared to the reality, which is an even more aggressive redistribution of wealth and control than the current systems. We need to be more realistic around progressive decentralization and realize the control is still in the hands of centralized parties, and it's not necessarily a bad thing in the short term as long as we create transparency on the reality of these systems and figure out legitimate paths for this technology to enhance the world we live in.
+
+If we all moved to crypto systems today, what would the world look like? Would there be more or less inequality? These gini coefficients don't take into consideration the majority who still isn't using them, and it's very easy to imagine these discrepancies would only widen the more adoption takes place.
+
+
+- we need to be careful about creating an impression that a specific problem has been solved because that impression can set alternative solutions/approaches farther back.
+
+
+### My Opinion
+
+I think we are mostly fitting current systems into DAOs and personally I'm not sure this is the right approach. To me the power of DAOs is going back to a more community centric capitalism where local supermarkets and insitutions are controlled by the direct people they serve in a community, and to me a lot of these major DAOs are trying to transform a nation-wide or world-wide institution into DAOs, but I'm not sure this approach doesn't end with the same problems it aims to solve (maybe outline these specifically more clearly)
+
+- we need to decouple the systems and the incentives in the correct ways, and we need to move away from the idea that being an early adopter will result in large financial wealth. We need real people and existing cooperatives and business structures to integrate the tech into what they are already doing and with their current set of incentives, and facilitate things in a way that helps to start address the real issues. 
+
+- there are problems in how we structure business in today's world, and we need to figure out how to improve on those problems, even if not necessarily solving every problem right away, we need to keep getting closer and closer whenever we have new tools that allow us to do so.
+
+
+
+## Reproducibility
+
+The intent is for the analysis to keep expanding to hundreds of DAOs and protocols automatically as Messari keeps developing more and more subgraphs.
+
+All of the code used for this analysis is open source and reproducible. Meaning, anyone should be able to re-create the analysis on new data, as well as perform the same analysis on older data.
+
+- Open source code:
+
+    - ... add here
+    
+- Reproducibility:
+
+    - all historical weekly datasets available (once I setup jobs and logic in full ofc)
+    
+        - could also do timetravel queries using The Graph to recreate the analysis as of a given date. It's actually quite easy, just need to add an extra filter to the queries that specifies to get the data as of a particular block. But if there are protocols on other chains would need to keep in mind the block number. (probably don't need all this detail here, can add this to the github repo instead maybe)
+    
+    - all code can be run to pull 
+
+
+
+
+
